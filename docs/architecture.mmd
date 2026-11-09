@@ -1,0 +1,18 @@
+flowchart TD
+  A[HR user - React UI] --> B[FastAPI]
+  B --> C{Resume source}
+  C -->|Text| D[Normalize and truncate]
+  C -->|PDF| E[PyMuPDF extraction]
+  E -->|No usable text| F[OCR.space or local Tesseract]
+  F --> D
+  D --> G[Prompt with untrusted document boundaries]
+  G --> H[Gemini primary]
+  H -->|Failure| I[Groq fallback]
+  H --> J[JSON parsing and Pydantic validation]
+  I --> J
+  J -->|Invalid| K[One repair attempt]
+  K --> J
+  J --> L[SQLAlchemy persistence]
+  L --> M[SQLite or Supabase PostgreSQL]
+  L --> N[Validated report to UI]
+  N --> O[History search and score filters]
