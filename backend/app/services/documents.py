@@ -38,7 +38,8 @@ def extract_pdf(data: bytes) -> str:
             doc = pymupdf.open(stream=data, filetype="pdf")
             pages = []
             for page in doc:
-                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                # pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
                 image = Image.open(io.BytesIO(pix.tobytes("png")))
                 pages.append(pytesseract.image_to_string(image))
             text = "\n".join(pages).strip()
@@ -47,3 +48,31 @@ def extract_pdf(data: bytes) -> str:
         except Exception:
             pass
     raise DocumentError("No readable text was found. This may be a scanned PDF. Configure OCR_SPACE_API_KEY or local Tesseract OCR, or paste the resume text.")
+
+from docx import Document
+
+def extract_docx(data: bytes) -> str:
+    try:
+        doc = Document(io.BytesIO(data))
+
+        parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+
+        # Include table content as well.
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                row_text = " | ".join(cell for cell in cells if cell)
+                if row_text:
+                    parts.append(row_text)
+
+        text = "\n".join(parts).strip()
+
+        if len(text) < 40:
+            raise DocumentError("No readable text was found in the DOCX job description.")
+
+        return text
+
+    except DocumentError:
+        raise
+    except Exception as exc:
+        raise DocumentError("This DOCX could not be opened. Please upload a valid DOCX file.") from exc

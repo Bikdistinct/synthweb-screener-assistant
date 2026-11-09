@@ -11,7 +11,8 @@ from .database import Base, engine, get_db
 from .models import Analysis
 from .schemas import MatchReport, AnalysisOut, HistoryPage
 from .services.llm import analyze_with_fallback
-from .services.documents import extract_pdf, DocumentError
+# from .services.documents import extract_pdf, DocumentError
+from .services.documents import extract_pdf, extract_docx, DocumentError
 
 import logging
 
@@ -49,44 +50,121 @@ def serialize(row: Analysis):
         report=MatchReport.model_validate(json.loads(row.report_json))
     )
 
+# @app.post("/api/v1/analyses", response_model=AnalysisOut)
+# async def create_analysis(
+#     job_description: str = Form(...),
+#     resume_text: str = Form(""),
+#     resume_file: UploadFile | None = File(None),
+#     db: Session = Depends(get_db)
+# ):
+#     jd = job_description.strip()
+#     if len(jd) < 30:
+#         raise HTTPException(422, "Please provide a job description with at least 30 characters.")
+#     resume = resume_text.strip()
+#     if resume_file and resume_file.filename:
+#         if not resume_file.filename.lower().endswith(".pdf"):
+#             raise HTTPException(415, "Only PDF resume uploads are supported.")
+#         data = await resume_file.read()
+#         if len(data) > settings.max_upload_mb * 1024 * 1024:
+#             raise HTTPException(413, f"Resume PDF exceeds {settings.max_upload_mb} MB.")
+#         if not data.startswith(b"%PDF"):
+#             raise HTTPException(415, "Uploaded file does not appear to be a valid PDF.")
+#         try:
+#             resume = extract_pdf(data)
+#         except DocumentError as exc:
+#             raise HTTPException(422, str(exc))
+#     if len(resume) < 30:
+#         raise HTTPException(422, "Please paste resume text or upload a readable PDF.")
+#     # Bound context while retaining the start/end portions where headers and recent experience often appear.
+#     cap = settings.max_input_chars
+#     if len(jd) > cap: jd = jd[:cap]
+#     if len(resume) > cap: resume = resume[:int(cap*.8)] + "\n[Middle content truncated due to length]\n" + resume[-int(cap*.2):]
+#     try:
+#         report, provider = await run_in_threadpool(analyze_with_fallback, jd, resume)
+#     except RuntimeError as exc:
+#         raise HTTPException(503, str(exc))
+#     except Exception:
+#         raise HTTPException(502, "The AI provider returned an invalid response. Please retry.")
+#     row = Analysis(candidate_name=report.candidate_name, match_score=report.match_score,
+#                    report_json=report.model_dump_json(), provider=provider)
+#     db.add(row); db.commit(); db.refresh(row)
+#     return serialize(row)
+
+
 @app.post("/api/v1/analyses", response_model=AnalysisOut)
 async def create_analysis(
-    job_description: str = Form(...),
+    job_description: str = Form(""),
+    jd_file: UploadFile | None = File(None),
     resume_text: str = Form(""),
     resume_file: UploadFile | None = File(None),
     db: Session = Depends(get_db)
 ):
     jd = job_description.strip()
+
+    if jd_file and jd_file.filename:
+        filename = jd_file.filename.lower()
+
+        if not (filename.endswith(".pdf") or filename.endswith(".docx")):
+            raise HTTPException(415, "Only PDF and DOCX job description uploads are supported.")
+
+        data = await jd_file.read()
+        if len(data) > settings.max_upload_mb * 1024 * 1024:
+            raise HTTPException(413, f"Job description file exceeds {settings.max_upload_mb} MB.")
+
+        try:
+            if filename.endswith(".pdf"):
+                if not data.startswith(b"%PDF"):
+                    raise HTTPException(415, "Uploaded job description does not appear to be a valid PDF.")
+                jd = extract_pdf(data)
+            else:
+                jd = extract_docx(data)
+        except DocumentError as exc:
+            raise HTTPException(422, str(exc))
+
     if len(jd) < 30:
-        raise HTTPException(422, "Please provide a job description with at least 30 characters.")
+        raise HTTPException(422, "Please paste a job description or upload a readable PDF/DOCX with at least 30 characters.")
+
     resume = resume_text.strip()
     if resume_file and resume_file.filename:
         if not resume_file.filename.lower().endswith(".pdf"):
             raise HTTPException(415, "Only PDF resume uploads are supported.")
+
         data = await resume_file.read()
         if len(data) > settings.max_upload_mb * 1024 * 1024:
             raise HTTPException(413, f"Resume PDF exceeds {settings.max_upload_mb} MB.")
         if not data.startswith(b"%PDF"):
             raise HTTPException(415, "Uploaded file does not appear to be a valid PDF.")
+
         try:
             resume = extract_pdf(data)
         except DocumentError as exc:
             raise HTTPException(422, str(exc))
+
     if len(resume) < 30:
         raise HTTPException(422, "Please paste resume text or upload a readable PDF.")
-    # Bound context while retaining the start/end portions where headers and recent experience often appear.
+
     cap = settings.max_input_chars
-    if len(jd) > cap: jd = jd[:cap]
-    if len(resume) > cap: resume = resume[:int(cap*.8)] + "\n[Middle content truncated due to length]\n" + resume[-int(cap*.2):]
+    if len(jd) > cap:
+        jd = jd[:cap]
+    if len(resume) > cap:
+        resume = resume[:int(cap * .8)] + "\n[Middle content truncated due to length]\n" + resume[-int(cap * .2):]
+
     try:
         report, provider = await run_in_threadpool(analyze_with_fallback, jd, resume)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
     except Exception:
         raise HTTPException(502, "The AI provider returned an invalid response. Please retry.")
-    row = Analysis(candidate_name=report.candidate_name, match_score=report.match_score,
-                   report_json=report.model_dump_json(), provider=provider)
-    db.add(row); db.commit(); db.refresh(row)
+
+    row = Analysis(
+        candidate_name=report.candidate_name,
+        match_score=report.match_score,
+        report_json=report.model_dump_json(),
+        provider=provider
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
     return serialize(row)
 
 @app.get("/api/v1/analyses", response_model=HistoryPage)
@@ -112,6 +190,7 @@ def list_analyses(
     total = db.scalar(count_stmt) or 0
     rows = db.scalars(stmt.order_by(Analysis.created_at.desc()).offset(offset).limit(limit)).all()
     return HistoryPage(items=[serialize(r) for r in rows], total=total, limit=limit, offset=offset)
+
 
 @app.get("/api/v1/analyses/{analysis_id}", response_model=AnalysisOut)
 def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
