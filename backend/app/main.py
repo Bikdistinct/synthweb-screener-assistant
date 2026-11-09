@@ -24,7 +24,12 @@ logging.basicConfig(
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Resume Screener Assistant", version="1.0.0")
 origins = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET","POST","DELETE"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=origins, 
+    allow_credentials=True, 
+    allow_methods=["GET","POST","DELETE","OPTIONS"], 
+    allow_headers=["*"])
 
 # Lightweight in-process guard. Use gateway-level rate limiting for multi-worker production.
 _hits = {}
